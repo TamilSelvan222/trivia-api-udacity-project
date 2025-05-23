@@ -1,0 +1,18 @@
+theme: jekyll-theme-cayman
+title: "My Trivia App"
+description: "A fun trivia API app with various quiz questions."
+url: "https://your-username.github.io/Trivia-API/"
+author: "Pravinkumar R"
+
+jekyll-theme-cayman:
+  show_excerpts: true  # Example of additional theme options
+plugins:
+  - jekyll-relative-links
+relative_links:
+  enabled: true
+  collections: true
+include:
+  - README.md
+  - LICENSE.md
+  - CONTRIBUTING.md
+  - API_Endpoints.md
