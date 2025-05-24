@@ -152,6 +152,8 @@ def create_app(test_config=None):
     def delete_question(question_id):
         try:
             question = Question.query.get(question_id)
+            if question is None:
+                abort(404, description="Question not found")
             question.delete()
             return jsonify({"success": True, "deleted": question_id})
         except BaseException:
@@ -338,12 +340,12 @@ def create_app(test_config=None):
         body = request.get_json()
 
         if not body or "category" not in body:
-            abort(404, description="Category name is required")
+            abort(400, description="Category name is required")
 
         new_category = body.get("category").strip()
 
         if not new_category:
-            abort(404, description="Category name cannot be empty or whitespace")
+            abort(400, description="Category name cannot be empty or whitespace")
 
         existing_category = Category.query.filter_by(type=new_category).first()
         if existing_category:
