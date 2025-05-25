@@ -1,413 +1,236 @@
-from flask import Flask, request, abort, jsonify
+from flask import Flask, request, jsonify, abort
 from flask_cors import CORS
 import random
 
 from models import setup_db, Question, Category, db
 
-QUESTIONS_PER_PAGE = 10
-
-"""
-Function: paginate_questions
-Purpose: Handles pagination for a list of questions.
-Parameters:
-    - request: The HTTP request object to retrieve the 'page' query parameter.
-    - selection: A list of questions to paginate.
-Returns: A list of formatted questions for the requested page.
-Logic:
-    - Determines the start and end indices based on the requested page number.
-    - Formats the questions and returns only the subset of questions for the current page.
-"""
+ITEMS_PER_PAGE = 10
 
 
-def paginate_questions(request, selection):
-    page = request.args.get("page", 1, type=int)
-    start = (page - 1) * QUESTIONS_PER_PAGE
-    end = start + QUESTIONS_PER_PAGE
+def paginate_items(req, items):
+    page_num = req.args.get("page", 1, type=int)
+    start_idx = (page_num - 1) * ITEMS_PER_PAGE
+    end_idx = start_idx + ITEMS_PER_PAGE
 
-    questions = [question.format() for question in selection]
-    current_questions = questions[start:end]
-
-    return current_questions
-
-
-"""
-Function: create_app
-Purpose: Creates and configures the Flask application, including database setup,
-         CORS configuration, and error handling.
-Parameters:
-    - test_config: Optional configuration for testing purposes (default: None).
-Returns: The configured Flask app instance.
-Setup:
-    - Initializes the Flask app.
-    - Sets up the database connection, including the test configuration if provided.
-    - Configures CORS to allow cross-origin requests from specified origins.
-    - Applies middleware for setting CORS headers after every request.
-"""
+    formatted_items = [item.format() for item in items]
+    return formatted_items[start_idx:end_idx]
 
 
 def create_app(test_config=None):
-
     app = Flask(__name__)
 
-    if test_config is None:
-        setup_db(app)
+    if test_config:
+        db_path = test_config.get("SQLALCHEMY_DATABASE_URI")
+        setup_db(app, database_path=db_path)
     else:
-        database_path = test_config.get("SQLALCHEMY_DATABASE_URI")
-        setup_db(app, database_path=database_path)
+        setup_db(app)
 
-    """
-    Set up CORS:
-    - Allows cross-origin requests from the specified origin (http://localhost:3000).
-    - Supports credentials to handle secure connections.
-    """
-    CORS(
-        app,
-        resources={r"/*": {"origins": "http://localhost:3000"}},
-        supports_credentials=True,
-    )
+    CORS(app, resources={r"/*": {"origins": "http://localhost:3000"}}, supports_credentials=True)
 
     with app.app_context():
         db.create_all()
 
-    """
-    Middleware: after_request
-    Purpose: Adds Access-Control-Allow headers to all HTTP responses to manage CORS.
-    Logic:
-        - Allows specific headers like Content-Type and Authorization.
-        - Permits HTTP methods such as GET, PUT, POST, DELETE, and OPTIONS.
-    """
-
     @app.after_request
-    def after_request(response):
-        response.headers.add(
-            "Access-Control-Allow-Headers", "Content-Type,Authorization,true"
-        )
-        response.headers.add(
-            "Access-Control-Allow-Methods", "GET,PUT,POST,DELETE,OPTIONS"
-        )
+    def add_cors_headers(response):
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization,true")
+        response.headers.add("Access-Control-Allow-Methods", "GET,PUT,POST,DELETE,OPTIONS")
         return response
 
-    """
-    Endpoint: /categories
-    Method: GET
-    Purpose: Retrieve all available categories.
-    Response: A JSON object containing categories as a dictionary.
-    Errors: 404 - If no categories are found.
-    """
-
     @app.route("/categories")
-    def retrieve_categories():
-
+    def get_categories():
         try:
-            categories = Category.query.order_by(Category.type).all()
-          
-            return jsonify({"success": True, "categories": {
-               category.id: category.type for category in categories}, })
-        
-        except Exception as e:
-            print(f"Error: {e}")
-            abort(404, description="resource not found")
-
-    """
-    Endpoint: /questions
-    Method: GET
-    Purpose: Retrieve all questions, paginated by 10 questions per page.
-    Response: A JSON object containing questions, total questions, and categories.
-    Errors: 404 - If no questions are found for the requested page.
-    """
+            all_categories = Category.query.order_by(Category.type).all()
+            categories_dict = {cat.id: cat.type for cat in all_categories}
+            if not categories_dict:
+                abort(404, description="No categories found")
+            return jsonify({"success": True, "categories": categories_dict})
+        except Exception as err:
+            print(f"Error retrieving categories: {err}")
+            abort(404, description="Resource not found")
 
     @app.route("/questions")
-    def retrieve_questions():
+    def get_questions():
         try:
-            selection = Question.query.order_by(Question.id).all()
-            current_questions = paginate_questions(request, selection)
+            all_questions = Question.query.order_by(Question.id).all()
+            paginated_questions = paginate_items(request, all_questions)
+            all_categories = Category.query.order_by(Category.type).all()
 
-            categories = Category.query.order_by(Category.type).all()
+            if not paginated_questions:
+                abort(404, description="No questions found for this page")
 
-            if len(current_questions) == 0:
-                abort(404, description="resource not found")
+            categories_dict = {cat.id: cat.type for cat in all_categories}
 
             return jsonify(
                 {
                     "success": True,
-                    "questions": current_questions,
-                    "total_questions": len(selection),
-                    "categories": {
-                        category.id: category.type for category in categories},
+                    "questions": paginated_questions,
+                    "total_questions": len(all_questions),
+                    "categories": categories_dict,
                     "current_category": None,
-                })
-        except Exception as e:
-            print(f"Error: {e}")
-            abort(404, description="resource not found")
+                }
+            )
+        except Exception as err:
+            print(f"Error retrieving questions: {err}")
+            abort(404, description="Resource not found")
 
-    """
-    Endpoint: /questions/<question_id>
-    Method: DELETE
-    Purpose: Delete a specific question by its ID.
-    Response: A JSON object confirming the deletion of the question.
-    Errors: 422 - If the question cannot be deleted.
-    """
-
-    @app.route("/questions/<question_id>", methods=["DELETE"])
-    def delete_question(question_id):
+    @app.route("/questions/<int:question_id>", methods=["DELETE"])
+    def remove_question(question_id):
         try:
             question = Question.query.get(question_id)
-            if question is None:
+            if not question:
                 abort(404, description="Question not found")
             question.delete()
             return jsonify({"success": True, "deleted": question_id})
-        except BaseException:
-            abort(422)
-
-    """
-    Endpoint: /questions
-    Method: POST
-    Purpose: Add a new question.
-    Response:
-      - If adding: Confirms the creation of the question.
-    Errors:
-      - 400 - If the request is missing required fields
-      - 422 - If the request cannot be processed.
-    """
+        except Exception as err:
+            print(f"Error deleting question: {err}")
+            abort(422, description="Unable to process request")
 
     @app.route("/questions", methods=["POST"])
-    def add_question():
-        body = request.get_json()
+    def create_question():
+        data = request.get_json()
+        required_fields = ("question", "answer", "difficulty", "category")
+
+        if not data or not all(field in data for field in required_fields):
+            abort(400, description="Missing required fields")
+
+        question_text = data["question"].strip()
+        answer_text = data["answer"].strip()
+        difficulty_level = data["difficulty"]
+        category_id = data["category"]
+
+        if not question_text or not answer_text:
+            abort(400, description="Question and Answer cannot be empty")
 
         try:
-            required_fields = (
-                "question", "answer", "difficulty", "category")
-            if not all(field in body for field in required_fields):
-                abort(400, description="Missing required fields")
-
-            new_question = body["question"]
-            new_answer = body["answer"]
-            new_difficulty = body["difficulty"]
-            new_category = body["category"]
-
-            if not new_question.strip() or not new_answer.strip():
-                abort(400, description="Question and Answer cannot be empty or only whitespace")
-
-            question = Question(
-                question=new_question,
-                answer=new_answer,
-                difficulty=int(new_difficulty),
-                category=int(new_category),
+            new_question = Question(
+                question=question_text,
+                answer=answer_text,
+                difficulty=int(difficulty_level),
+                category=int(category_id),
             )
-            question.insert()
-
-            return jsonify(
-                {
-                    "success": True,
-                    "created": question.id,
-                }
-            ),201
-        except Exception as e:
-            print(f"Error: {e}")
+            new_question.insert()
+            return jsonify({"success": True, "created": new_question.id}), 201
+        except Exception as err:
+            print(f"Error creating question: {err}")
             abort(422, description="Unprocessable request")
 
-    """
-    Endpoint: /questions/search
-    Method: POST
-    Purpose: search for questions based on a search term.
-    Response:
-      - Returns matching questions and the total number of matches.
-    Errors:
-      - 400 - If the request is missing required fields or the search term is invalid.
-      - 422 - If the request cannot be processed.
-    """
-
-    @app.route('/questions/search', methods=['POST'])
-    def search_questions():
-        
+    @app.route("/questions/search", methods=["POST"])
+    def search_for_questions():
         data = request.get_json()
-        search_term = data.get('searchTerm', '').strip()
+        search_term = data.get("searchTerm", "").strip()
 
         if not search_term:
             abort(400, description="Search term is required")
+
         try:
-            # Search questions in the database
-            results = Question.query.filter(
+            matched_questions = Question.query.filter(
                 Question.question.ilike(f"%{search_term}%")
             ).all()
 
-            if not results:
-                return jsonify({
-                    "success": True,
-                    "questions": [],
-                    "total_questions": 0
-                }), 200
-
-            # Format the results
-            formatted_questions = [q.format() for q in results]
-
-            return jsonify({
-                "success": True,
-                "questions": formatted_questions,
-                "total_questions": len(formatted_questions)
-            }), 200
-
-        except Exception as e:
-            print(f"Error: {e}")
-            abort(422, description="Unprocessable request")
-
-    """
-    Endpoint: /categories/<int:category_id>/questions
-    Method: GET
-    Purpose: Retrieve questions filtered by a specific category ID.
-    Response: A JSON object containing questions, total questions, and the category ID.
-    Errors: 404 - If the category or questions for the category are not found.
-    """
-
-    @app.route("/categories/<int:category_id>/questions", methods=["GET"])
-    def retrieve_questions_by_category(category_id):
-
-        try:
-            questions = Question.query.filter(
-                Question.category == str(category_id)
-            ).all()
-            if not questions:
-                abort(404, description="resource not found")
+            formatted_results = [q.format() for q in matched_questions]
 
             return jsonify(
                 {
                     "success": True,
-                    "questions": [question.format() for question in questions],
-                    "total_questions": len(questions),
-                    "current_category": category_id,
+                    "questions": formatted_results,
+                    "total_questions": len(formatted_results),
                 }
             )
-        except BaseException:
-            abort(404, description="resource not found")
+        except Exception as err:
+            print(f"Error searching questions: {err}")
+            abort(422, description="Unprocessable request")
 
-    """
-    Endpoint: /quizzes
-    Method: POST
-    Purpose: Retrieve a random question for a quiz session based on a category
-             and previously asked questions.
-    Response: A JSON object containing a single question.
-    Errors:
-       - 400 - If the request is missing required fields.
-        -422 - If the request cannot be processed.
-    """
+    @app.route("/categories/<int:cat_id>/questions", methods=["GET"])
+    def get_questions_by_category(cat_id):
+        try:
+            questions_in_category = Question.query.filter(
+                Question.category == str(cat_id)
+            ).all()
+
+            if not questions_in_category:
+                abort(404, description="No questions found for this category")
+
+            formatted_questions = [q.format() for q in questions_in_category]
+
+            return jsonify(
+                {
+                    "success": True,
+                    "questions": formatted_questions,
+                    "total_questions": len(formatted_questions),
+                    "current_category": cat_id,
+                }
+            )
+        except Exception as err:
+            print(f"Error retrieving questions by category: {err}")
+            abort(404, description="Resource not found")
 
     @app.route("/quizzes", methods=["POST"])
-    def play_quiz():
-        body = request.get_json()
+    def quiz_game():
+        data = request.get_json()
 
-        if not ("quiz_category" in body and "previous_questions" in body):
-            abort(404, description="quiz_category and previous_question is required")
+        if not data or "quiz_category" not in data or "previous_questions" not in data:
+            abort(400, description="quiz_category and previous_questions are required")
+
+        quiz_category = data.get("quiz_category")
+        previous_questions = data.get("previous_questions")
+
         try:
-            category = body.get("quiz_category")
-            previous_questions = body.get("previous_questions")
-
-            if category["type"] == "click":
+            if quiz_category["type"] == "click":
                 available_questions = Question.query.filter(
-                    Question.id.notin_((previous_questions))
+                    Question.id.notin_(previous_questions)
                 ).all()
             else:
-                available_questions = (
-                    Question.query.filter_by(category=category["id"])
-                    .filter(Question.id.notin_((previous_questions)))
-                    .all()
-                )
+                available_questions = Question.query.filter_by(
+                    category=quiz_category["id"]
+                ).filter(Question.id.notin_(previous_questions)).all()
 
-            new_question = (
-                available_questions[
-                    random.randrange(0, len(available_questions))
-                ].format()
-                if len(available_questions) > 0
-                else None
-            )
+            if available_questions:
+                selected_question = random.choice(available_questions).format()
+            else:
+                selected_question = None
 
-            return jsonify({"success": True, "question": new_question})
-        except BaseException:
-            abort(422)
-
-    """
-    Endpoint: /categories
-    Method: POST
-    Purpose: Add a new category to the database.
-    Response: A JSON object confirming the creation of the category.
-    Errors:
-      - 404 - If the category name is missing or empty.
-      - 400 - If the category already exists.
-      - 422 - If the request cannot be processed.
-    """
+            return jsonify({"success": True, "question": selected_question})
+        except Exception as err:
+            print(f"Error during quiz play: {err}")
+            abort(422, description="Unprocessable request")
 
     @app.route("/categories", methods=["POST"])
-    def create_category():
-        body = request.get_json()
+    def add_category():
+        data = request.get_json()
 
-        if not body or "category" not in body:
+        if not data or "category" not in data:
             abort(400, description="Category name is required")
 
-        new_category = body.get("category").strip()
+        category_name = data.get("category").strip()
 
-        if not new_category:
-            abort(400, description="Category name cannot be empty or whitespace")
+        if not category_name:
+            abort(400, description="Category name cannot be empty")
 
-        existing_category = Category.query.filter_by(type=new_category).first()
-        if existing_category:
+        existing = Category.query.filter_by(type=category_name).first()
+        if existing:
             abort(400, description="Category already exists")
 
         try:
-
-            category = Category(type=new_category)
-
-            db.session.add(category)
+            new_category = Category(type=category_name)
+            db.session.add(new_category)
             db.session.commit()
-
-            return jsonify(
-                {
-                    "success": True,
-                    "created": category.id,
-                }
-            )
-
-        except Exception as e:
-            print(f"Error: {e}")
-            abort(422, description="Unable to process the request")
-
-    """
-    Error Handler: 404
-    Purpose: Handle resource not found errors.
-    Response: A JSON object with an error code and a description of the error.
-    """
+            return jsonify({"success": True, "created": new_category.id})
+        except Exception as err:
+            print(f"Error adding category: {err}")
+            abort(422, description="Unable to process request")
 
     @app.errorhandler(404)
-    def not_found(error):
-        message = (
-            error.description if hasattr(
-                error,
-                "description") else "resource not found")
-        return jsonify(
-            {"success": False, "error": 404, "message": message}), 404
-
-    """
-    Error Handler: 422
-    Purpose: Handle unprocessable entity errors.
-    Response: A JSON object with an error code and a description of the error.
-    """
+    def handle_404(error):
+        message = getattr(error, "description", "Resource not found")
+        return jsonify({"success": False, "error": 404, "message": message}), 404
 
     @app.errorhandler(422)
-    def unprocessable(error):
-        return (
-            jsonify({"success": False, "error": 422, "message": "unprocessable"}),
-            422,
-        )
-
-    """
-    Error Handler: 400
-    Purpose: Handle bad request errors.
-    Response: A JSON object with an error code and a description of the error.
-    """
+    def handle_422(error):
+        return jsonify({"success": False, "error": 422, "message": "Unprocessable"}), 422
 
     @app.errorhandler(400)
-    def bad_request(error):
-        message = error.description if hasattr(
-            error, "description") else "bad request"
-        return jsonify(
-            {"success": False, "error": 400, "message": message}), 400
+    def handle_400(error):
+        message = getattr(error, "description", "Bad request")
+        return jsonify({"success": False, "error": 400, "message": message}), 400
 
     return app
